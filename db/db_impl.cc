@@ -1197,21 +1197,32 @@ Status DBImpl::Delete(const WriteOptions& options, const Slice& key) {
   return DB::Delete(options, key);
 }
 
+// Write 函数是线程安全的
 Status DBImpl::Write(const WriteOptions& options, WriteBatch* updates) {
+  // 每次调用 Write 都会创建一个局部变量 Writer
   Writer w(&mutex_);
   w.batch = updates;
   w.sync = options.sync;
   w.done = false;
 
+  
+  // 把Writer放入到std::deque之后，判断Writer是否为队首，如果是则本线程会被选做工作线程，把std::deque中的所有Writer请求进行合并处理。
+  // 合并后进行写入操作前，工作线程会把std::deque的互斥量解锁，这时候其他线程就可以继续往std::deque中添加写入命令了，但是无法执行，因为std::deque队首仍然是目前的工作线程。
+  // 工作线程写入完成后，会pop出之前合并的Writer，同时唤醒对应的线程，让它们返回。最后在自己返回前，唤醒新的队首线程，它将会作为下一个工作线程进行合并写入操作。
+  
+  // 尝试将 Writer 放到任务队列 writers_ 中，writers_是一个 std::deque 结构，通过互斥量 mutex_ 来保证其线程安全
   MutexLock l(&mutex_);
   writers_.push_back(&w);
   while (!w.done && &w != writers_.front()) {
+    // Writer 任务没有执行完成，并且自己不是队首任务，那么等待队首线程把自己任务处理完即可
     w.cv.Wait();
   }
+  // 队首线程已经把任务处理完成了，直接返回即可
   if (w.done) {
     return w.status;
   }
 
+  // 队首任务线程才可以走到这里，开始执行 Writer 任务，先判断是否有足够的空间进行写入
   // May temporarily unlock and wait.
   Status status = MakeRoomForWrite(updates == nullptr);
   uint64_t last_sequence = versions_->LastSequence();
@@ -1323,8 +1334,12 @@ WriteBatch* DBImpl::BuildBatchGroup(Writer** last_writer) {
 // REQUIRES: mutex_ is held
 // REQUIRES: this thread is currently at the front of the writer queue
 Status DBImpl::MakeRoomForWrite(bool force) {
-  mutex_.AssertHeld();
+  mutex_.AssertHeld(); // 用于clang的线程安全分析
   assert(!writers_.empty());
+
+  // Write 如果写入空的 WriteBatch 表示触发compactions，所以：
+  // 写入： force = false,  allow_delay = true
+  // 触发compactions：force = true,  allow_delay = false
   bool allow_delay = !force;
   Status s;
   while (true) {
@@ -1334,6 +1349,8 @@ Status DBImpl::MakeRoomForWrite(bool force) {
       break;
     } else if (allow_delay && versions_->NumLevelFiles(0) >=
                                   config::kL0_SlowdownWritesTrigger) {
+      // LO文件数量达到了软限
+
       // We are getting close to hitting a hard limit on the number of
       // L0 files.  Rather than delaying a single write by several
       // seconds when we hit the hard limit, start delaying each
