@@ -43,12 +43,14 @@ Status TableCache::FindTable(uint64_t file_number, uint64_t file_size,
   Status s;
   char buf[sizeof(file_number)];
   EncodeFixed64(buf, file_number);
+  // 每一个 SSTable 文件的 number 作为 TableCache 中的 key
   Slice key(buf, sizeof(buf));
   *handle = cache_->Lookup(key);
   if (*handle == nullptr) {
     std::string fname = TableFileName(dbname_, file_number);
     RandomAccessFile* file = nullptr;
     Table* table = nullptr;
+    // 没有在内存 TableCache 中找到，尝试打开文件
     s = env_->NewRandomAccessFile(fname, &file);
     if (!s.ok()) {
       std::string old_fname = SSTTableFileName(dbname_, file_number);
@@ -57,6 +59,7 @@ Status TableCache::FindTable(uint64_t file_number, uint64_t file_size,
       }
     }
     if (s.ok()) {
+      // 读取加载解析各种 block 到内存中
       s = Table::Open(options_, file, file_size, &table);
     }
 
@@ -83,13 +86,16 @@ Iterator* TableCache::NewIterator(const ReadOptions& options,
   }
 
   Cache::Handle* handle = nullptr;
+  // 在 TableCache 中查找该 SSTable，如果没找到那么进行加载
   Status s = FindTable(file_number, file_size, &handle);
   if (!s.ok()) {
     return NewErrorIterator(s);
   }
 
   Table* table = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
+  // 构造 Table 的 iterator 然后返回
   Iterator* result = table->NewIterator(options);
+  // iterator 被销毁的时候 UnrefEntry 会让 handle 的 ref - 1
   result->RegisterCleanup(&UnrefEntry, cache_, handle);
   if (tableptr != nullptr) {
     *tableptr = table;
@@ -102,9 +108,11 @@ Status TableCache::Get(const ReadOptions& options, uint64_t file_number,
                        void (*handle_result)(void*, const Slice&,
                                              const Slice&)) {
   Cache::Handle* handle = nullptr;
+  // 在 LRUCache 中查询对应 number 的 SST 文件，如果没有查到那么读取磁盘加载该 SST 文件
   Status s = FindTable(file_number, file_size, &handle);
   if (s.ok()) {
     Table* t = reinterpret_cast<TableAndFile*>(cache_->Value(handle))->table;
+    // 在 Index Block 和 Data Block 中进行查到，查到之后调用 handle_result 回调函数
     s = t->InternalGet(options, k, arg, handle_result);
     cache_->Release(handle);
   }

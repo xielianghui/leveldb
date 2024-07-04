@@ -24,6 +24,7 @@ enum RecordType {
 };
 static const int kMaxRecordType = kLastType;
 
+// LOG 文件由一个个 32KB 的 block 顺序组成
 static const int kBlockSize = 32768;
 
 // Header is checksum (4 bytes), length (2 bytes), type (1 byte).

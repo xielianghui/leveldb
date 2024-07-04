@@ -195,6 +195,7 @@ class Block::Iter : public Iterator {
         CorruptionError();
         return;
       }
+      // restart array 对应的 key 都是没有压缩的key，所以长度直接为 non_shared
       Slice mid_key(key_ptr, non_shared);
       if (Compare(mid_key, target) < 0) {
         // Key at "mid" is smaller than "target".  Therefore all

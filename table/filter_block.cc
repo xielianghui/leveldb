@@ -5,6 +5,7 @@
 #include "table/filter_block.h"
 
 #include "leveldb/filter_policy.h"
+
 #include "util/coding.h"
 
 namespace leveldb {
@@ -21,6 +22,10 @@ FilterBlockBuilder::FilterBlockBuilder(const FilterPolicy* policy)
 void FilterBlockBuilder::StartBlock(uint64_t block_offset) {
   uint64_t filter_index = (block_offset / kFilterBase);
   assert(filter_index >= filter_offsets_.size());
+  // https://stackoverflow.com/questions/63590049/does-leveldb-generate-bloom-filter-every-4kb-or-2kb-of-data-block
+  // 这样实现在默认大小 block size 为 4KB 的情况下，filter_index 会计算出等于2
+  // 然后调用两次 GenerateFilter，第二次构造的 Filter
+  // 为空，不知道为什么这么设计？
   while (filter_index > filter_offsets_.size()) {
     GenerateFilter();
   }
@@ -57,6 +62,7 @@ void FilterBlockBuilder::GenerateFilter() {
   }
 
   // Make list of keys from flattened key structure
+  // 把之前写入的 key 全部都分离出来，保存到 tmp_keys_ 中
   start_.push_back(keys_.size());  // Simplify length computation
   tmp_keys_.resize(num_keys);
   for (size_t i = 0; i < num_keys; i++) {

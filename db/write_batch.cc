@@ -120,6 +120,7 @@ class MemTableInserter : public WriteBatch::Handler {
 
   void Put(const Slice& key, const Slice& value) override {
     mem_->Add(sequence_, kTypeValue, key, value);
+    // 注意 SequenceNumber 在这里做了自增，也就是每一条命令都有单独的 SequenceNumber
     sequence_++;
   }
   void Delete(const Slice& key) override {
@@ -133,6 +134,7 @@ Status WriteBatchInternal::InsertInto(const WriteBatch* b, MemTable* memtable) {
   MemTableInserter inserter;
   inserter.sequence_ = WriteBatchInternal::Sequence(b);
   inserter.mem_ = memtable;
+  // WriteBatch 中的 record 根据类型依次调用 Put/Delete
   return b->Iterate(&inserter);
 }
 

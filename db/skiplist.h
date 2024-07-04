@@ -260,17 +260,25 @@ typename SkipList<Key, Comparator>::Node*
 SkipList<Key, Comparator>::FindGreaterOrEqual(const Key& key,
                                               Node** prev) const {
   Node* x = head_;
+  // 从目前跳表中最高的 level 开始查找
   int level = GetMaxHeight() - 1;
   while (true) {
     Node* next = x->Next(level);
     if (KeyIsAfterNode(key, next)) {
+      // 从这一层向右查找，直到找到比 key 大于等于的 node 或者 nullptr（意味着到这一层链表的尾部了）
       // Keep searching in this list
       x = next;
     } else {
-      if (prev != nullptr) prev[level] = x;
+      // 这里说明找到了 key 在这一层应该插入的位置，这里有两种情况：
+      // 1. 在这一层找到比 key 更大的 node，那么插入位置就是在 x 和 next 之间，所以 prev 是 x
+      // 2. 在这一层抵达了尾部，那么插入位置就是在 x 之后作为新的尾部，所以 prev 也是 x
+      // 保存 x 到 prev 数组，表示 x 是 key 在这一层插入位置的前节点
+      if (prev != nullptr) prev[level] = x; 
       if (level == 0) {
+        // 每一层的插入位置都确定好了，可以返回
         return next;
       } else {
+        // 往下一层继续确定插入位置
         // Switch to next list
         level--;
       }
@@ -335,14 +343,18 @@ template <typename Key, class Comparator>
 void SkipList<Key, Comparator>::Insert(const Key& key) {
   // TODO(opt): We can use a barrier-free variant of FindGreaterOrEqual()
   // here since Insert() is externally synchronized.
+
+  // 找到每一层 key 的插入位置，保存在 prev 中
   Node* prev[kMaxHeight];
   Node* x = FindGreaterOrEqual(key, prev);
 
   // Our data structure does not allow duplicate insertion
   assert(x == nullptr || !Equal(key, x->key));
-
+  
+  // 确定新 node 的层数
   int height = RandomHeight();
   if (height > GetMaxHeight()) {
+    // 如果比目前最高层都高，那么需要更新最高层 max_height_，并且把多出来的那些层的 prev 节点置为 head_
     for (int i = GetMaxHeight(); i < height; i++) {
       prev[i] = head_;
     }
@@ -355,11 +367,16 @@ void SkipList<Key, Comparator>::Insert(const Key& key) {
     // keys.  In the latter case the reader will use the new node.
     max_height_.store(height, std::memory_order_relaxed);
   }
-
+  
+  // new 出新的 node，并且把这个 node 插入到每一层的 list 中，这也是为什么前面需要记录 prev 的原因
   x = NewNode(key, height);
   for (int i = 0; i < height; i++) {
     // NoBarrier_SetNext() suffices since we will add a barrier when
     // we publish a pointer to "x" in prev[i].
+
+    // 从底层 list 往高层 list 一个个插入
+    // 这也是 max_height_ 更新不需要同步机制的原因，因为当你在高一层的 list 能够查到新的 node
+    // 的时候，说明往下的 list 也可以查到
     x->NoBarrier_SetNext(i, prev[i]->NoBarrier_Next(i));
     prev[i]->SetNext(i, x);
   }

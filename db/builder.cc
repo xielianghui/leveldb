@@ -19,7 +19,8 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
   Status s;
   meta->file_size = 0;
   iter->SeekToFirst();
-
+  
+  // 创建 .ldb 文件，文件编号和 WAL 文件一样都是由 versions_->NewFileNumber() 产生的
   std::string fname = TableFileName(dbname, meta->number);
   if (iter->Valid()) {
     WritableFile* file;
@@ -29,17 +30,23 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
     }
 
     TableBuilder* builder = new TableBuilder(options, file);
+    // 记录下 imutable memtable 跳表中的最小的 internal key
     meta->smallest.DecodeFrom(iter->key());
     Slice key;
     for (; iter->Valid(); iter->Next()) {
+      // 从 level 0 遍历 imutable memtable 跳表
       key = iter->key();
+      // iter->value() 实际上也是从 iter->key() 中解析出来的
       builder->Add(key, iter->value());
     }
     if (!key.empty()) {
+      // 记录下 imutable memtable 跳表中的最大的 internal key
       meta->largest.DecodeFrom(key);
     }
 
     // Finish and check for builder errors
+    // 按照SSTable格式写入 ldb 文件中，包含用户数据的 DataBlock 和辅助数据 FilterBlock / MetaIndex Block / IndexBlock 
+    // 以及 footer
     s = builder->Finish();
     if (s.ok()) {
       meta->file_size = builder->FileSize();
@@ -49,9 +56,11 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
 
     // Finish and check for file errors
     if (s.ok()) {
+      // sync 落盘
       s = file->Sync();
     }
     if (s.ok()) {
+      // close fd
       s = file->Close();
     }
     delete file;
@@ -59,6 +68,7 @@ Status BuildTable(const std::string& dbname, Env* env, const Options& options,
 
     if (s.ok()) {
       // Verify that the table is usable
+      // 尝试把刚刚创建的 SSTable 加载到 TableCache 中并创建 iterator
       Iterator* it = table_cache->NewIterator(ReadOptions(), meta->number,
                                               meta->file_size);
       s = it->status();

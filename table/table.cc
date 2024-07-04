@@ -41,14 +41,17 @@ Status Table::Open(const Options& options, RandomAccessFile* file,
   if (size < Footer::kEncodedLength) {
     return Status::Corruption("file is too short to be an sstable");
   }
-
+  
+  // 先解析固定长度为 48 字节的 footer
   char footer_space[Footer::kEncodedLength];
   Slice footer_input;
+  // footer 在文件的尾部
   Status s = file->Read(size - Footer::kEncodedLength, Footer::kEncodedLength,
                         &footer_input, footer_space);
   if (!s.ok()) return s;
 
   Footer footer;
+  // 解析出 metaindex block 和 index block 两个block的 offset 和 size
   s = footer.DecodeFrom(&footer_input);
   if (!s.ok()) return s;
 
@@ -58,6 +61,7 @@ Status Table::Open(const Options& options, RandomAccessFile* file,
   if (options.paranoid_checks) {
     opt.verify_checksums = true;
   }
+  // 读取 Block 的数据，需要做 CRC 校验以及解压缩
   s = ReadBlock(file, opt, footer.index_handle(), &index_block_contents);
 
   if (s.ok()) {
@@ -73,6 +77,7 @@ Status Table::Open(const Options& options, RandomAccessFile* file,
     rep->filter_data = nullptr;
     rep->filter = nullptr;
     *table = new Table(rep);
+    // 加载 filter block
     (*table)->ReadMeta(footer);
   }
 
@@ -101,6 +106,7 @@ void Table::ReadMeta(const Footer& footer) {
   std::string key = "filter.";
   key.append(rep_->options.filter_policy->Name());
   iter->Seek(key);
+  // 读取每一个 filter，目前常用的就是布隆过滤器
   if (iter->Valid() && iter->key() == Slice(key)) {
     ReadFilter(iter->value());
   }
@@ -216,18 +222,24 @@ Status Table::InternalGet(const ReadOptions& options, const Slice& k, void* arg,
                                                 const Slice&)) {
   Status s;
   Iterator* iiter = rep_->index_block->NewIterator(rep_->options.comparator);
+  // 先在 Index Block 中进行查询
   iiter->Seek(k);
   if (iiter->Valid()) {
     Slice handle_value = iiter->value();
     FilterBlockReader* filter = rep_->filter;
     BlockHandle handle;
+    // Index Block 的 value 中保存的是 Data Block 在文件中的 offset 和 size
     if (filter != nullptr && handle.DecodeFrom(&handle_value).ok() &&
         !filter->KeyMayMatch(handle.offset(), k)) {
       // Not found
     } else {
+      // 读取 Data Block
       Iterator* block_iter = BlockReader(this, options, iiter->value());
+      // 接着在 Data Block 中查找，Index Block 和 Data Block 的结构是一样的
+      // 所以查询逻辑也是一致的
       block_iter->Seek(k);
       if (block_iter->Valid()) {
+        // 查到后调用回调函数
         (*handle_result)(arg, block_iter->key(), block_iter->value());
       }
       s = block_iter->status();
