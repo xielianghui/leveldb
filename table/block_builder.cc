@@ -78,11 +78,14 @@ void BlockBuilder::Add(const Slice& key, const Slice& value) {
   if (counter_ < options_->block_restart_interval) {
     // See how much sharing to do with previous string
     const size_t min_length = std::min(last_key_piece.size(), key.size());
+    // 计算和上次写入的 key 有多长的相同前缀，尝试进行压缩
     while ((shared < min_length) && (last_key_piece[shared] == key[shared])) {
       shared++;
     }
   } else {
     // Restart compression
+    // 默认设置下，每写入 16 对 key-value 就会记录一个 restart point
+    // restart point 对应的 key 会写入全量数据，不会进行前缀 share
     restarts_.push_back(buffer_.size());
     counter_ = 0;
   }
@@ -98,7 +101,8 @@ void BlockBuilder::Add(const Slice& key, const Slice& value) {
   buffer_.append(value.data(), value.size());
 
   // Update state
-  last_key_.resize(shared);
+  // 把当前 key 记录到 last_key 方便用于下一次写入时进行前缀的计算
+  last_key_.resize(shared); // 这里使用 resize shared 可以减少 shared 长度的拷贝
   last_key_.append(key.data() + shared, non_shared);
   assert(Slice(last_key_) == key);
   counter_++;

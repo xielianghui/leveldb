@@ -77,6 +77,7 @@ Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
   size_t n = static_cast<size_t>(handle.size());
   char* buf = new char[n + kBlockTrailerSize];
   Slice contents;
+  // 从文件中读取该 Block 的内容
   Status s = file->Read(handle.offset(), n + kBlockTrailerSize, &contents, buf);
   if (!s.ok()) {
     delete[] buf;
@@ -90,6 +91,7 @@ Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
   // Check the crc of the type and the block contents
   const char* data = contents.data();  // Pointer to where Read put the data
   if (options.verify_checksums) {
+    // crc 校验
     const uint32_t crc = crc32c::Unmask(DecodeFixed32(data + n + 1));
     const uint32_t actual = crc32c::Value(data, n + 1);
     if (actual != crc) {
@@ -100,7 +102,10 @@ Status ReadBlock(RandomAccessFile* file, const ReadOptions& options,
   }
 
   switch (data[n]) {
+    // 是否需要解压缩
     case kNoCompression:
+      // 有可能使用 mmap 加载的文件，所有有可能 data 不使用 buf 的空间
+      // 而是指向 mmap 申请的空间
       if (data != buf) {
         // File implementation gave us pointer to some other data.
         // Use it directly under the assumption that it will be live

@@ -10,6 +10,7 @@
 #include "leveldb/env.h"
 #include "leveldb/filter_policy.h"
 #include "leveldb/options.h"
+
 #include "table/block_builder.h"
 #include "table/filter_block.h"
 #include "table/format.h"
@@ -128,6 +129,7 @@ void TableBuilder::Flush() {
   if (!ok()) return;
   if (r->data_block.empty()) return;
   assert(!r->pending_index_entry);
+  // 写入一个 DataBlcok，其中会进行压缩且在后面加上压缩类型和crc校验码
   WriteBlock(&r->data_block, &r->pending_handle);
   if (ok()) {
     r->pending_index_entry = true;
@@ -145,9 +147,12 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
   //    crc: uint32
   assert(ok());
   Rep* r = rep_;
+
+  // 这时候 raw 中只有 key value 和 restart array 的数据
   Slice raw = block->Finish();
 
   Slice block_contents;
+  // 压缩算法 进行数据压缩
   CompressionType type = r->options.compression;
   // TODO(postrelease): Support more compression options: zlib?
   switch (type) {
@@ -192,10 +197,13 @@ void TableBuilder::WriteBlock(BlockBuilder* block, BlockHandle* handle) {
 void TableBuilder::WriteRawBlock(const Slice& block_contents,
                                  CompressionType type, BlockHandle* handle) {
   Rep* r = rep_;
+  // offset 和 size 并没有包含 BlockTrailer
   handle->set_offset(r->offset);
   handle->set_size(block_contents.size());
+  // 写入压缩过后的数据
   r->status = r->file->Append(block_contents);
   if (r->status.ok()) {
+    // 写入压缩类型 type 和 crc 校验码
     char trailer[kBlockTrailerSize];
     trailer[0] = type;
     uint32_t crc = crc32c::Value(block_contents.data(), block_contents.size());
@@ -203,6 +211,7 @@ void TableBuilder::WriteRawBlock(const Slice& block_contents,
     EncodeFixed32(trailer + 1, crc32c::Mask(crc));
     r->status = r->file->Append(Slice(trailer, kBlockTrailerSize));
     if (r->status.ok()) {
+      // 更新 offset
       r->offset += block_contents.size() + kBlockTrailerSize;
     }
   }
@@ -237,6 +246,7 @@ Status TableBuilder::Finish() {
     }
 
     // TODO(postrelease): Add stats and other meta blocks
+    // 如果没有 filter_block 还是会写入一个为 0 的 restart point，感觉有点没必要
     WriteBlock(&meta_index_block, &metaindex_block_handle);
   }
 

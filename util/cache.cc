@@ -78,7 +78,9 @@ class HandleTable {
 
   LRUHandle* Insert(LRUHandle* h) {
     LRUHandle** ptr = FindPointer(h->key(), h->hash);
+    // 这里使用了二级指针
     LRUHandle* old = *ptr;
+    // 将 h 插入到 hash 的链表中
     h->next_hash = (old == nullptr ? nullptr : old->next_hash);
     *ptr = h;
     if (old == nullptr) {
@@ -86,6 +88,7 @@ class HandleTable {
       if (elems_ > length_) {
         // Since each cache entry is fairly large, we aim for a small
         // average linked list length (<= 1).
+        // rehash
         Resize();
       }
     }
@@ -113,6 +116,7 @@ class HandleTable {
   // matches key/hash.  If there is no such cache entry, return a
   // pointer to the trailing slot in the corresponding linked list.
   LRUHandle** FindPointer(const Slice& key, uint32_t hash) {
+    // 显然这里的实现是链地址法
     LRUHandle** ptr = &list_[hash & (length_ - 1)];
     while (*ptr != nullptr && ((*ptr)->hash != hash || key != (*ptr)->key())) {
       ptr = &(*ptr)->next_hash;
@@ -197,6 +201,7 @@ class LRUCache {
 
 LRUCache::LRUCache() : capacity_(0), usage_(0) {
   // Make empty circular linked lists.
+  // 环形链表的初始化 prev 和 next 都指向自己
   lru_.next = &lru_;
   lru_.prev = &lru_;
   in_use_.next = &in_use_;
@@ -238,12 +243,14 @@ void LRUCache::Unref(LRUHandle* e) {
 }
 
 void LRUCache::LRU_Remove(LRUHandle* e) {
+  // 从链表中移除元素 e
   e->next->prev = e->prev;
   e->prev->next = e->next;
 }
 
 void LRUCache::LRU_Append(LRUHandle* list, LRUHandle* e) {
   // Make "e" newest entry by inserting just before *list
+  // 添加新元素 e 到环形链表中 list 后面的位置
   e->next = list;
   e->prev = list->prev;
   e->prev->next = e;
@@ -279,19 +286,24 @@ Cache::Handle* LRUCache::Insert(const Slice& key, uint32_t hash, void* value,
   e->hash = hash;
   e->in_cache = false;
   e->refs = 1;  // for the returned handle.
+  // 柔性数组的应用
   std::memcpy(e->key_data, key.data(), key.size());
 
   if (capacity_ > 0) {
     e->refs++;  // for the cache's reference.
     e->in_cache = true;
+    // 插入到环形双向链表 in_use_ 中
     LRU_Append(&in_use_, e);
     usage_ += charge;
+    // table_.Insert 往 hash 中插入元素 e，如果hash表中已经有和 e 相同的元素，那么会进行覆盖更新并且返回
+    // FinishErase 则负责将返回的 old 元素从链表中删除
     FinishErase(table_.Insert(e));
   } else {  // don't cache. (capacity_==0 is supported and turns off caching.)
     // next is read by key() in an assert, so it must be initialized
     e->next = nullptr;
   }
   while (usage_ > capacity_ && lru_.next != &lru_) {
+    // 如果超过了容量，那么从 lru 链表中最久没有使用过的元素开始进行删除
     LRUHandle* old = lru_.next;
     assert(old->refs == 1);
     bool erased = FinishErase(table_.Remove(old->key(), old->hash));
@@ -338,6 +350,7 @@ static const int kNumShards = 1 << kNumShardBits;
 
 class ShardedLRUCache : public Cache {
  private:
+  // 数据分片来减少锁冲突
   LRUCache shard_[kNumShards];
   port::Mutex id_mutex_;
   uint64_t last_id_;
